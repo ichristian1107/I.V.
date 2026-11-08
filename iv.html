@@ -1,0 +1,1270 @@
+<!doctype html>
+<html lang="es" data-modo="azul">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#04070d">
+<link rel="manifest" href="manifest.json">
+<title>I.V</title>
+<!--
+  I.V — núcleo nuevo. Un solo archivo, sin librerías, funciona sin internet para todo menos "pensar" (Gemini).
+
+  CÓMO ESTÁ ARMADO (de arriba hacia abajo en el código):
+  1. DB        guarda todo en el celular (localStorage, prefijo "iv:")
+  2. Voice     voz que habla (síntesis) y voz que escucha (reconocimiento)
+  3. Plugins   cada "mano" es un archivo .js que corre en un Worker aislado (sin acceso a tu clave ni a la pantalla)
+  4. Brain     habla con Gemini y le pasa las herramientas de los plugins (function calling)
+  5. UI        chat, orbe, modo azul/rojo, ventanas de Manos / Memoria / Ajustes
+
+  Para sumar una función nueva: escribe un plugin (mira los bloques <script type="text/iv-plugin"> al final)
+  y súbelo desde MANOS > Agregar plugin, o pídele a I.V que lo cree.
+-->
+<style>
+:root {
+  --rgb: 46, 168, 255;
+  --acc: rgb(var(--rgb));
+  --bg: #04070d;
+  --bg2: #0a1422;
+  --fg: #dff0ff;
+  --muted: #7f93a8;
+  --line: rgba(var(--rgb), .28);
+  --glow: rgba(var(--rgb), .45);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+html[data-modo="rojo"] {
+  --rgb: 255, 59, 59;
+  --bg: #0b0405;
+  --bg2: #1b0a0c;
+  --fg: #ffe4e4;
+  --muted: #b78f90;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: radial-gradient(120% 70% at 50% 0%, var(--bg2), var(--bg) 60%);
+  color: var(--fg);
+  font: 15px/1.45 var(--font);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: background .5s;
+}
+button { font: inherit; color: inherit; }
+header.top {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-right, 0px)) 6px max(14px, env(safe-area-inset-left, 0px));
+}
+.pill {
+  justify-self: center;
+  font: 600 12px var(--mono);
+  letter-spacing: .16em;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(var(--rgb), .08);
+  color: var(--acc);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.ghost {
+  font: 600 11px var(--mono);
+  letter-spacing: .14em;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ghost:active { background: rgba(var(--rgb), .15); }
+#modoBtn { justify-self: end; color: #ff6b6b; border-color: #ff3b3b; font-weight: 800; }
+html[data-modo="rojo"] #modoBtn { background: #ff3b3b; color: #000; }
+#cfgBtn { justify-self: start; }
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image: linear-gradient(rgba(var(--rgb), .06) 1px, transparent 1px), linear-gradient(90deg, rgba(var(--rgb), .06) 1px, transparent 1px);
+  background-size: 28px 28px; -webkit-mask-image: radial-gradient(circle at 50% 18%, #000, transparent 72%); mask-image: radial-gradient(circle at 50% 18%, #000, transparent 72%); }
+body::after { content: ""; position: fixed; inset: 0; z-index: 5; pointer-events: none; opacity: 0; }
+html[data-modo="rojo"] body::after { opacity: 1; box-shadow: inset 0 0 110px rgba(255, 30, 30, .6); animation: alarm 1.1s ease-in-out infinite; }
+body.flash::after { opacity: 1; box-shadow: inset 0 0 70px rgba(var(--rgb), .7); animation: alarm .6s ease-in-out 8; }
+@keyframes alarm { 50% { opacity: .2; } }
+@keyframes blink { 50% { opacity: .5; } }
+.hazard { display: none; height: 9px; background: repeating-linear-gradient(-45deg, #ff3b3b 0 12px, #150506 12px 24px); }
+html[data-modo="rojo"] .hazard { display: block; }
+html[data-modo="rojo"] .pill { background: #ff3b3b; color: #000; border-color: #ff3b3b; animation: blink 1s steps(2) infinite; }
+.hud { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 2px 14px 0; }
+.ringbox { position: relative; width: 128px; height: 128px; flex: none; }
+#ring { width: 100%; height: 100%; display: block; }
+#ring line { stroke: var(--acc); stroke-width: 1.7; stroke-linecap: round; }
+html[data-modo="rojo"] #ring line { stroke-width: 2.4; }
+#ring circle { fill: none; stroke: var(--line); stroke-width: 1; }
+#ring .c2 { stroke-dasharray: 3 5; transform-origin: 60px 60px; animation: spin 24s linear infinite; }
+html[data-modo="rojo"] #ring .c2 { animation-duration: 3s; stroke: var(--acc); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.rc { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.rc b { font: 800 22px var(--mono); letter-spacing: .12em; color: var(--acc); text-shadow: 0 0 14px var(--glow); }
+html[data-modo="rojo"] .rc b { font-size: 15px; }
+.rc small { font: 600 8.5px var(--mono); letter-spacing: .14em; color: var(--muted); margin-top: 2px; }
+.ro { margin: 0; display: grid; grid-template-columns: auto auto; gap: 6px 18px; }
+.ro dt { font: 600 9.5px var(--mono); letter-spacing: .14em; color: var(--muted); }
+.ro dd { margin: 0; font: 700 16px var(--mono); color: var(--acc); }
+.free { margin: 0 max(14px, env(safe-area-inset-left, 0px)) 6px; padding: 8px; font: 700 11px var(--mono); letter-spacing: .14em; border: 1px dashed var(--line); background: transparent; color: var(--muted); border-radius: 8px; cursor: pointer; }
+.free.on { border: 1px solid var(--acc); background: var(--acc); color: #000; }
+.quick {
+  display: grid;
+  grid-auto-flow: column; grid-auto-columns: 1fr;
+  gap: 6px;
+  padding: 6px max(14px, env(safe-area-inset-right, 0px)) 8px max(14px, env(safe-area-inset-left, 0px));
+}
+.quick button {
+  font: 600 10.5px var(--mono);
+  letter-spacing: .08em;
+  padding: 9px 2px;
+  background: rgba(var(--rgb), .07);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.quick button:active, .quick a:active { background: rgba(var(--rgb), .22); }
+.quick a { display: block; text-align: center; text-decoration: none; font: 800 11px var(--mono); letter-spacing: .06em; padding: 10px 2px; border-radius: 8px; color: #000; background: #ff3b3b; border: 1px solid #ff3b3b; }
+.quick a small { display: block; font-size: 15px; }
+#chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px max(14px, env(safe-area-inset-right, 0px)) 10px max(14px, env(safe-area-inset-left, 0px));
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+}
+.msg { max-width: 86%; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.u { align-self: flex-end; background: rgba(var(--rgb), .2); border: 1px solid var(--line); border-bottom-right-radius: 3px; }
+.msg.a { align-self: flex-start; background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .08); border-bottom-left-radius: 3px; }
+.msg.sys { align-self: center; max-width: 94%; font: 12px var(--mono); color: var(--acc); text-align: center; padding: 4px 8px; }
+.msg.tool { align-self: flex-start; font: 11px var(--mono); color: var(--muted); padding: 0 4px; }
+form.bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px max(14px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px));
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, .25);
+}
+#txt {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  font: 16px/1.35 var(--font);
+  color: var(--fg);
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+#txt:focus-visible, .ghost:focus-visible, .quick button:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+.ib {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--acc);
+  background: rgba(var(--rgb), .12);
+  color: var(--acc);
+  font: 700 11px var(--mono);
+  letter-spacing: .05em;
+  cursor: pointer;
+}
+.ib.on { background: var(--acc); color: #000; }
+#send { background: var(--acc); color: #000; }
+/* ventanas */
+#modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .6); }
+#modal[hidden] { display: none; }
+.sheet {
+  width: 100%;
+  max-width: 640px;
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.sheet > header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 8px; }
+.sheet h2 { margin: 0; font: 700 14px var(--mono); letter-spacing: .14em; color: var(--acc); text-transform: uppercase; }
+.sheet .body { overflow-y: auto; padding: 4px 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: rgba(255, 255, 255, .03); }
+.card h3 { margin: 0 0 2px; font-size: 15px; }
+.card p { margin: 2px 0; color: var(--muted); font-size: 13px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tag { font: 11px var(--mono); padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--acc); }
+.btn { font: 600 13px var(--font); padding: 9px 14px; border-radius: 8px; border: 1px solid var(--acc); background: rgba(var(--rgb), .12); color: var(--acc); cursor: pointer; }
+.btn.main { background: var(--acc); color: #000; }
+.btn.warn { border-color: #ff6b6b; color: #ff9b9b; background: transparent; }
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+input[type=text], input[type=password], select, textarea.big {
+  font: 16px var(--font);
+  color: var(--fg);
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  width: 100%;
+}
+textarea.big { font: 12px/1.4 var(--mono); min-height: 140px; }
+pre.code { margin: 6px 0 0; padding: 10px; max-height: 240px; overflow: auto; background: #000; border: 1px solid var(--line); border-radius: 8px; font: 11px/1.4 var(--mono); color: #bfe0ff; white-space: pre; }
+.msg.lnk { align-self: flex-start; background: var(--acc); color: #000; font-weight: 700; text-decoration: none; }
+#toast {
+  position: fixed;
+  left: 50%;
+  top: calc(56px + env(safe-area-inset-top, 0px));
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: 90%;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: var(--acc);
+  color: #000;
+  font: 600 13px var(--font);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+#toast.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <button class="ghost" id="cfgBtn" type="button">AJUSTES</button>
+  <div class="pill" id="pill">Iniciando</div>
+  <button class="ghost" id="modoBtn" type="button" aria-label="Cambiar modo">MODO AZUL</button>
+</header>
+
+<div class="hazard" aria-hidden="true"></div>
+<section class="hud" aria-label="Estado de I.V">
+  <div class="ringbox">
+    <svg id="ring" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="35"/><circle class="c2" cx="60" cy="60" r="29"/></svg>
+    <div class="rc"><b id="rcT">I.V</b><small id="rcS">INICIANDO</small></div>
+  </div>
+  <dl class="ro">
+    <div><dt>HORA</dt><dd id="roH">--:--</dd></div>
+    <div><dt>AVISOS</dt><dd id="roA">0</dd></div>
+    <div><dt>MEMORIA</dt><dd id="roM">0</dd></div>
+    <div><dt>MANOS</dt><dd id="roP">0</dd></div>
+  </dl>
+</section>
+
+<nav class="quick" id="quick" aria-label="Accesos rápidos"></nav>
+
+<main id="chat" aria-live="polite"></main>
+
+<button class="free" id="conv" type="button" aria-pressed="false">MANOS LIBRES: APAGADO</button>
+<form class="bar" id="form" autocomplete="off">
+  <textarea id="txt" rows="2" placeholder="Escríbele o toca el micrófono" aria-label="Mensaje"></textarea>
+  <button class="ib" id="mic" type="button" title="Hablar">MIC</button>
+  <button class="ib" id="send" type="submit" title="Enviar">IR</button>
+</form>
+
+<div id="modal" hidden><div class="sheet"><header><h2 id="mTitle"></h2><button class="ghost" id="mClose" type="button">CERRAR</button></header><div class="body" id="mBody"></div></div></div>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+/* =========================================================
+   1. DB: todo se guarda en el celular
+   ========================================================= */
+const DB = {
+  get(k, d) { try { const v = localStorage.getItem("iv:" + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("iv:" + k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+  del(k) { try { localStorage.removeItem("iv:" + k); } catch (e) {} }
+};
+const $ = (s) => document.querySelector(s);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const MODELOS_RESPALDO = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash-lite"];
+const cfg = Object.assign({ key: "", model: MODELOS_RESPALDO[0], nombre: "Mauro", voz: true, modo: "azul" }, DB.get("cfg", {}));
+const saveCfg = () => DB.set("cfg", cfg);
+let facts = DB.get("facts", []);
+let chat = DB.get("chat", []);
+let busy = false;
+let conv = false;
+
+/* =========================================================
+   UI básica
+   ========================================================= */
+let toastT;
+function toast(t) {
+  const el = $("#toast"); el.textContent = t; el.classList.add("on");
+  clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("on"), 3200);
+}
+function setStatus(label, orb) {
+  const red = cfg.modo === "rojo";
+  $("#pill").textContent = (red ? "ALERTA · " : "") + label;
+  $("#rcS").textContent = label.toUpperCase();
+  Ring.state = orb || "idle";
+}
+const Ring = {
+  N: 60, ticks: [], state: "idle",
+  init() {
+    const NS = "http://www.w3.org/2000/svg", svg = $("#ring");
+    for (let i = 0; i < this.N; i++) { const l = document.createElementNS(NS, "line"); l.dataset.a = String(i / this.N * Math.PI * 2); svg.appendChild(l); this.ticks.push(l); }
+    this.draw(0);
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) { const loop = (ms) => { this.draw(ms / 1000); requestAnimationFrame(loop); }; requestAnimationFrame(loop); }
+  },
+  draw(t) {
+    const red = cfg.modo === "rojo", s = this.state;
+    this.ticks.forEach((l, i) => {
+      const a = +l.dataset.a; let len;
+      if (red) len = 5 + 10 * Math.abs(Math.sin(t * 7 + i * 0.9)) * (i % 2 ? 1 : 0.6);
+      else if (s === "think") len = 4 + 10 * Math.max(0, Math.sin(t * 6 - i * 0.45));
+      else if (s === "talk") len = 4 + 10 * Math.abs(Math.sin(t * 8 + i * 1.7) * Math.sin(t * 3 + i * 0.5));
+      else if (s === "listen") len = 6 + 6 * (0.5 + 0.5 * Math.sin(t * 3)) + 2 * Math.sin(i * 2 + t * 5);
+      else len = 3 + 2.5 * (0.5 + 0.5 * Math.sin(t * 1.2 + i * 0.35));
+      const sx = Math.sin(a), sy = -Math.cos(a);
+      l.setAttribute("x1", (60 + sx * 40).toFixed(1)); l.setAttribute("y1", (60 + sy * 40).toFixed(1));
+      l.setAttribute("x2", (60 + sx * (40 + len)).toFixed(1)); l.setAttribute("y2", (60 + sy * (40 + len)).toFixed(1));
+    });
+  }
+};
+function readouts() {
+  $("#roH").textContent = new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+  $("#roA").textContent = Timers.list.length; $("#roM").textContent = facts.length;
+  $("#roP").textContent = [...PLUG.values()].filter((p) => !p.off).reduce((n, p) => n + p.meta.tools.length, 0) + CORE_TOOLS.length;
+}
+function renderQuick() {
+  const q = $("#quick"); q.textContent = "";
+  if (cfg.modo === "rojo") {
+    [["POLICÍA", "105"], ["SAMU", "106"], ["BOMBEROS", "116"]].forEach(([n, num]) => { const a = el("a", { href: "tel:" + num }, n); a.append(el("small", {}, num)); q.append(a); });
+    q.append(el("button", { type: "button", "data-q": "fin" }, "TERMINAR"));
+  } else {
+    [["hoy", "HOY"], ["gasto", "GASTO"], ["habitos", "HÁBITOS"], ["manos", "MANOS"], ["memoria", "MEMORIA"]].forEach(([k, n]) => q.append(el("button", { type: "button", "data-q": k }, n)));
+  }
+}
+function applyModo() {
+  const red = cfg.modo === "rojo";
+  document.documentElement.dataset.modo = cfg.modo;
+  $("#modoBtn").textContent = red ? "SALIR" : "ALERTA";
+  $("#rcT").textContent = red ? "ALERTA" : "I.V";
+  const m = document.querySelector('meta[name="theme-color"]'); if (m) m.content = red ? "#0b0405" : "#04070d";
+  renderQuick();
+}
+function setModo(m) { cfg.modo = m === "rojo" ? "rojo" : "azul"; saveCfg(); applyModo(); setStatus(busy ? "Pensando" : "En línea", Ring.state); }
+function entrarAlerta(preguntar) {
+  if (cfg.modo === "rojo") return;
+  setModo("rojo");
+  try { navigator.vibrate && navigator.vibrate([250, 100, 250]); } catch (e) {}
+  if (preguntar === false) return;
+  const q = "Modo alerta activado. ¿Qué pasó?";
+  addMsg("a", q, true); Voice.unlock();
+  Voice.speak(q).then(() => { if (cfg.modo === "rojo" && SR && !conv) { conv = true; refreshFree(); listen(); } });
+  if (!SR) $("#txt").focus();
+}
+function salirAlerta(avisar) {
+  if (cfg.modo !== "rojo") return;
+  setModo("azul"); stopConv(); Voice.stop();
+  if (avisar !== false) addMsg("sys", "Alerta terminada. Todo vuelve a la normalidad, " + cfg.nombre + ".", true);
+}
+function flash() { document.body.classList.add("flash"); setTimeout(() => document.body.classList.remove("flash"), 5000); try { navigator.vibrate && navigator.vibrate([150, 80, 150]); } catch (e) {} }
+function refreshFree() { const b = $("#conv"); b.classList.toggle("on", conv); b.setAttribute("aria-pressed", String(conv)); b.textContent = "MANOS LIBRES: " + (conv ? "ACTIVO · di 'apágate' para salir" : "APAGADO"); }
+function addMsg(kind, text, persist) {
+  const d = document.createElement("div");
+  d.className = "msg " + kind; d.textContent = text;
+  const box = $("#chat"); box.appendChild(d); box.scrollTop = box.scrollHeight;
+  if (persist) { chat.push({ k: kind, t: text, ts: Date.now() }); chat = chat.slice(-80); DB.set("chat", chat); }
+  return d;
+}
+function renderChat() {
+  $("#chat").textContent = "";
+  chat.forEach((m) => { const d = document.createElement("div"); d.className = "msg " + m.k; d.textContent = m.t; $("#chat").appendChild(d); });
+  $("#chat").scrollTop = $("#chat").scrollHeight;
+}
+function openModal(title, node) {
+  $("#mTitle").textContent = title; const b = $("#mBody"); b.textContent = ""; b.appendChild(node); $("#modal").hidden = false;
+}
+function closeModal() { $("#modal").hidden = true; $("#mBody").textContent = ""; }
+function el(tag, props, ...kids) {
+  const n = document.createElement(tag);
+  for (const k in props || {}) { if (k === "class") n.className = props[k]; else if (k.startsWith("data-")) n.setAttribute(k, props[k]); else if (k.startsWith("on")) n.addEventListener(k.slice(2), props[k]); else n[k] = props[k]; }
+  kids.flat().forEach((c) => n.append(c));
+  return n;
+}
+
+/* =========================================================
+   2. Voice: hablar y escuchar
+   ========================================================= */
+const Voice = {
+  voices: [], unlocked: false, speaking: false,
+  async load() {
+    if (!("speechSynthesis" in window)) return;
+    const get = () => (this.voices = speechSynthesis.getVoices());
+    if (get().length) return;
+    await new Promise((res) => { const t = setTimeout(res, 2000); speechSynthesis.addEventListener("voiceschanged", () => { get(); clearTimeout(t); res(); }, { once: true }); });
+  },
+  pick() {
+    const pref = ["es-PE", "es-MX", "es-US", "es-419", "es-CO", "es-AR", "es-ES"];
+    for (const p of pref) { const v = this.voices.find((x) => x.lang.replace("_", "-") === p); if (v) return v; }
+    return this.voices.find((x) => /^es/i.test(x.lang)) || null;
+  },
+  unlock() {
+    // Android puede quitar el permiso de audio si la primera voz suena segundos después del toque
+    if (this.unlocked || !("speechSynthesis" in window)) return;
+    this.unlocked = true;
+    try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch (e) {}
+  },
+  chunks(text) {
+    const parts = text.replace(/\s+/g, " ").match(/[^.!?;:\n]+[.!?;:]?/g) || [text];
+    const out = []; let cur = "";
+    for (const p of parts) { if ((cur + p).length > 170 && cur) { out.push(cur); cur = p; } else cur += p; }
+    if (cur.trim()) out.push(cur);
+    return out;
+  },
+  async speak(text) {
+    if (!cfg.voz || !("speechSynthesis" in window) || !text) return;
+    await this.load();
+    const voice = this.pick();
+    const list = this.chunks(String(text));
+    this.speaking = true; setStatus("Hablando", "talk");
+    for (const part of list) {
+      if (!this.speaking) break;
+      await new Promise((res) => {
+        const u = new SpeechSynthesisUtterance(part);
+        if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = "es-PE";
+        u.rate = 1; u.pitch = 0.92;
+        u.onend = res; u.onerror = res;
+        speechSynthesis.speak(u);
+      });
+    }
+    this.speaking = false;
+    setStatus("En línea", "idle");
+  },
+  stop() { this.speaking = false; try { if (speechSynthesis.speaking) speechSynthesis.cancel(); } catch (e) {} }
+};
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+const ERR_MIC = {
+  "not-allowed": "El micrófono está bloqueado. En Chrome toca el candado de la barra y permite el micrófono.",
+  "service-not-allowed": "Chrome no deja usar la voz en esta página. Ábrela desde una dirección https o usa la app de I.V.",
+  "network": "El reconocimiento de voz necesita internet.",
+  "audio-capture": "No encuentro un micrófono.",
+  "language-not-supported": "Tu Chrome no tiene el idioma español para voz."
+};
+function listen() {
+  if (!SR) { addMsg("sys", "Aquí no hay reconocimiento de voz (hace falta Chrome). Escribe mientras tanto, o usa la app nativa de I.V cuando esté lista."); conv = false; refreshFree(); return; }
+  if (rec) return;
+  Voice.stop();
+  rec = new SR(); rec.lang = "es-PE"; rec.interimResults = false; rec.maxAlternatives = 1;
+  setStatus("Escuchando", "listen"); $("#mic").classList.add("on");
+  let got = false, fail = false;
+  rec.onresult = (e) => {
+    got = true; const t = e.results[0][0].transcript.trim();
+    if (conv && /^(i\.?\s?v\.?\s)?(ap[aá]gate|eso es todo|ya est[aá])/i.test(t)) { stopConv(); toast("Manos libres apagado"); return; }
+    sendText(t);
+  };
+  rec.onerror = (e) => {
+    if (e.error === "no-speech" || e.error === "aborted") return;
+    fail = true; addMsg("sys", ERR_MIC[e.error] || ("Falló el micrófono (" + e.error + ")")); stopConv();
+  };
+  rec.onend = () => {
+    rec = null; $("#mic").classList.remove("on");
+    if (!got && !fail) { setStatus("En línea", "idle"); if (conv && !busy) setTimeout(listen, 400); }
+  };
+  try { rec.start(); } catch (e) { rec = null; addMsg("sys", "No pude iniciar el micrófono: " + e.message); stopConv(); }
+}
+function stopConv() { conv = false; refreshFree(); try { rec && rec.stop(); } catch (e) {} if (!busy && !Voice.speaking) setStatus("En línea", "idle"); }
+
+/* =========================================================
+   Recordatorios (temporizadores guardados)
+   ========================================================= */
+const Timers = {
+  list: DB.get("timers", []),
+  save() { DB.set("timers", this.list); },
+  add(ts, text) {
+    if (!isFinite(ts) || ts < Date.now() - 1000) throw new Error("la hora ya pasó");
+    const t = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ts, text };
+    this.list.push(t); this.save();
+    try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
+    return t.id;
+  },
+  cancel(id) { const n = this.list.length; this.list = this.list.filter((t) => t.id !== id); this.save(); return n - this.list.length; },
+  fire(t) {
+    flash();
+    addMsg("sys", "Recordatorio: " + t.text, true); toast("Recordatorio: " + t.text);
+    try { if ("Notification" in window && Notification.permission === "granted") new Notification("I.V", { body: t.text }); } catch (e) {}
+    Voice.speak("Recordatorio. " + t.text);
+  },
+  tick() {
+    const now = Date.now(); const due = this.list.filter((t) => t.ts <= now);
+    if (!due.length) return;
+    this.list = this.list.filter((t) => t.ts > now); this.save(); due.forEach((t) => this.fire(t));
+  },
+  start() { this.tick(); setInterval(() => this.tick(), 5000); }
+};
+
+/* =========================================================
+   3. Plugins: cada "mano" corre en un Worker aislado
+   ========================================================= */
+const KNOWN_PERMS = { store: "guardar sus propios datos", voz: "hablar en voz alta", avisos: "programar avisos y recordatorios", internet: "leer datos de internet", celular: "usar funciones del celular (app nativa)", enlaces: "mostrarte botones para abrir WhatsApp, llamadas, mapas o música", firebase: "leer los datos de tu negocio (QR / CIT) en Firebase" };
+function workerMain() {
+  const post = self.postMessage.bind(self);
+  const pending = new Map(); let rid = 0; let def = null;
+  const api = new Proxy({}, { get: (_, m) => (...args) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); post({ t: "api", rid: id, m: String(m), args }); }) });
+  const IV = { plugin(d) {
+    def = d;
+    post({ t: "register", meta: { id: d.id, name: d.name, description: d.description, permissions: d.permissions || [],
+      tools: (d.tools || []).map((x) => ({ name: x.name, description: x.description, params: x.params || {}, required: x.required || [] })) } });
+  } };
+  // sin red ni almacenamiento propio: todo pasa por "api", que revisa permisos
+  for (const k of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches", "BroadcastChannel", "SharedWorker", "Worker"]) {
+    let o = self;
+    while (o && o !== Object.prototype) { try { delete o[k]; } catch (e) {} try { Object.defineProperty(o, k, { value: undefined, configurable: true, writable: true }); } catch (e) {} o = Object.getPrototypeOf(o); }
+  }
+  self.addEventListener("message", async (e) => {
+    const m = e.data;
+    if (m.t === "load") {
+      try { new Function("IV", m.code)(IV); post({ t: "loaded" }); } catch (err) { post({ t: "error", msg: String((err && err.message) || err) }); }
+    } else if (m.t === "apiResult") {
+      const p = pending.get(m.rid); if (p) { pending.delete(m.rid); m.ok ? p.res(m.value) : p.rej(new Error(m.error)); }
+    } else if (m.t === "call") {
+      try {
+        const tool = ((def && def.tools) || []).find((x) => x.name === m.tool);
+        if (!tool) throw new Error("la herramienta no existe");
+        let v = await tool.run(m.args || {}, api);
+        try { v = v === undefined ? null : JSON.parse(JSON.stringify(v)); } catch (e2) { v = String(v); }
+        post({ t: "result", cid: m.cid, ok: true, value: v });
+      } catch (err) { post({ t: "result", cid: m.cid, ok: false, error: String((err && err.message) || err) }); }
+    }
+  });
+  post({ t: "ready" });
+}
+const WORKER_SRC = "(" + workerMain.toString() + ")()";
+const PLUG = new Map();   // id -> { id, meta, worker, perms, builtin, calls }
+const TOOLS = new Map();  // nombre de herramienta -> id del plugin
+let cidN = 0;
+
+function newWorker() {
+  const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
+  const w = new Worker(url); setTimeout(() => URL.revokeObjectURL(url), 3000); return w;
+}
+async function fetchJson(url) {
+  if (!/^https:\/\//i.test(url)) throw new Error("solo se permite https");
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) throw new Error("respuesta " + r.status);
+    const txt = (await r.text()).slice(0, 200000);
+    try { return JSON.parse(txt); } catch (e) { return txt; }
+  } finally { clearTimeout(t); }
+}
+const LINK_OK = [/^https:\/\/wa\.me\//, /^https:\/\/(www\.|music\.)?youtube\.com\//, /^https:\/\/www\.google\.com\/(maps|search)/, /^https:\/\/maps\.google\.com\//, /^https:\/\/open\.spotify\.com\//, /^tel:\+?[0-9]+$/, /^sms:\+?[0-9]*(\?body=.*)?$/];
+function addLink(label, url) {
+  if (!LINK_OK.some((r) => r.test(url))) throw new Error("ese enlace no está permitido");
+  const a = el("a", { class: "msg lnk", href: url, target: "_blank", rel: "noopener" }, "▶ " + label);
+  const box = $("#chat"); box.appendChild(a); box.scrollTop = box.scrollHeight;
+}
+async function httpFb(url, method, body) {
+  let u; try { u = new URL(url); } catch (e) { throw new Error("dirección no válida"); }
+  const okHost = u.hostname === "identitytoolkit.googleapis.com" || /\.(firebaseio\.com|firebasedatabase\.app)$/.test(u.hostname);
+  if (u.protocol !== "https:" || !okHost) throw new Error("dirección no permitida");
+  if (method !== "GET" && method !== "POST") throw new Error("método no permitido");
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch(url, { method, signal: ctl.signal, headers: method === "POST" ? { "Content-Type": "application/json" } : undefined, body: method === "POST" ? JSON.stringify(body) : undefined });
+    const txt = await r.text();
+    if (!r.ok) throw new Error("respuesta " + r.status + ": " + txt.slice(0, 160));
+    if (txt.length > 1500000) throw new Error("respuesta demasiado grande; pide una ruta más específica");
+    try { return JSON.parse(txt); } catch (e) { return txt; }
+  } finally { clearTimeout(t); }
+}
+function nativeCall(name, args) {
+  if (!window.IVNative || typeof window.IVNative.run !== "function") throw new Error("esa función necesita la app nativa de I.V, que aún no está conectada");
+  const r = window.IVNative.run(name, JSON.stringify(args || {}));
+  try { return JSON.parse(r); } catch (e) { return r; }
+}
+async function handleApi(ctx, m) {
+  const need = (p) => { if (!ctx.perms.has(p)) throw new Error("permiso no concedido: " + p); };
+  const [a, b] = m.args;
+  switch (m.m) {
+    case "storeGet": need("store"); return DB.get("pd:" + ctx.id + ":" + a, null);
+    case "storeSet": need("store"); return DB.set("pd:" + ctx.id + ":" + a, b);
+    case "say": need("voz"); Voice.speak(String(a)); return true;
+    case "notifyAt": need("avisos"); return Timers.add(Number(a), String(b));
+    case "timersList": need("avisos"); return Timers.list.map((t) => ({ id: t.id, ts: t.ts, text: t.text }));
+    case "timersCancel": need("avisos"); return Timers.cancel(String(a));
+    case "fetchJson": need("internet"); return fetchJson(String(a));
+    case "native": need("celular"); return nativeCall(String(a), b);
+    case "enlace": need("enlaces"); addLink(String(a), String(b)); return true;
+    case "http": need("firebase"); return httpFb(String(a), String(b || "GET"), m.args[2]);
+    case "log": console.log("[plugin " + ctx.id + "]", a); return true;
+    default: throw new Error("api desconocida: " + m.m);
+  }
+}
+// Arranca un worker con el código del plugin. opts: {perms:Array|null (null = confiar en lo que declara), preview:boolean}
+function spawnPlugin(code, opts) {
+  return new Promise((resolve, reject) => {
+    const w = newWorker();
+    const ctx = { id: null, perms: new Set(opts.perms || []), meta: null };
+    const timer = setTimeout(() => { w.terminate(); reject(new Error("el plugin tardó demasiado en cargar")); }, 5000);
+    const calls = new Map();
+    w.onerror = (e) => { clearTimeout(timer); w.terminate(); reject(new Error(e.message || "error en el plugin")); };
+    w.onmessage = async (e) => {
+      const m = e.data;
+      if (m.t === "ready") w.postMessage({ t: "load", code });
+      else if (m.t === "register") {
+        ctx.meta = m.meta; ctx.id = m.meta.id;
+        if (opts.perms === null) ctx.perms = new Set(m.meta.permissions);
+      } else if (m.t === "loaded") {
+        clearTimeout(timer);
+        if (!ctx.meta) { w.terminate(); return reject(new Error("el plugin no llamó a IV.plugin(...)")); }
+        resolve({ meta: ctx.meta, worker: w, ctx, calls });
+      } else if (m.t === "error") { clearTimeout(timer); w.terminate(); reject(new Error(m.msg)); }
+      else if (m.t === "api") {
+        try {
+          if (opts.preview) throw new Error("no disponible en la vista previa");
+          const v = await handleApi(ctx, m); w.postMessage({ t: "apiResult", rid: m.rid, ok: true, value: v === undefined ? null : v });
+        } catch (err) { w.postMessage({ t: "apiResult", rid: m.rid, ok: false, error: String(err.message || err) }); }
+      } else if (m.t === "result") {
+        const c = calls.get(m.cid); if (!c) return; calls.delete(m.cid); clearTimeout(c.t);
+        m.ok ? c.res(m.value) : c.rej(new Error(m.error));
+      }
+    };
+  });
+}
+function registerPlugin(res, builtin, code) {
+  const { meta, worker, ctx, calls } = res;
+  for (const t of meta.tools) {
+    if (!/^[a-z_][a-z0-9_]{1,50}$/.test(t.name)) { worker.terminate(); throw new Error("nombre de herramienta no válido: " + t.name); }
+    if (TOOLS.has(t.name) && TOOLS.get(t.name) !== meta.id) { worker.terminate(); throw new Error("la herramienta " + t.name + " ya existe en otro plugin"); }
+  }
+  meta.tools.forEach((t) => TOOLS.set(t.name, meta.id));
+  PLUG.set(meta.id, { id: meta.id, meta, worker, perms: ctx.perms, builtin, calls, code });
+}
+function unloadPlugin(id) {
+  const p = PLUG.get(id); if (!p) return;
+  p.worker.terminate(); p.meta.tools.forEach((t) => TOOLS.delete(t.name)); PLUG.delete(id);
+}
+function callPluginTool(name, args) {
+  const p = PLUG.get(TOOLS.get(name));
+  if (!p) return Promise.reject(new Error("herramienta no disponible"));
+  return new Promise((res, rej) => {
+    const cid = ++cidN;
+    const t = setTimeout(() => { p.calls.delete(cid); rej(new Error("tiempo agotado")); }, 15000);
+    p.calls.set(cid, { res, rej, t });
+    p.worker.postMessage({ t: "call", cid, tool: name, args });
+  });
+}
+async function loadBuiltins() {
+  const off = DB.get("off", []);
+  for (const s of document.querySelectorAll('script[type="text/iv-plugin"]')) {
+    try {
+      const code = s.textContent;
+      const res = await spawnPlugin(code, { perms: null });
+      if (off.includes(res.meta.id)) { res.worker.terminate(); PLUG.set(res.meta.id, { id: res.meta.id, meta: res.meta, worker: { terminate() {} }, perms: res.ctx.perms, builtin: true, off: true, calls: new Map(), code }); continue; }
+      registerPlugin(res, true, code);
+    } catch (e) { console.error("plugin base falló", e); toast("Un plugin base falló: " + e.message); }
+  }
+}
+async function loadUserPlugins() {
+  for (const r of DB.get("plugins", [])) {
+    if (!r.enabled) continue;
+    try { registerPlugin(await spawnPlugin(r.code, { perms: r.perms }), false, r.code); }
+    catch (e) { toast("No cargó el plugin " + r.id + ": " + e.message); }
+  }
+}
+async function previewMeta(code) {
+  const r = await spawnPlugin(code, { perms: [], preview: true }); r.worker.terminate(); return r.meta;
+}
+function permName(p) { return KNOWN_PERMS[p] || "permiso desconocido (se ignora)"; }
+async function proposePlugin(code) {
+  let meta;
+  try { meta = await previewMeta(String(code)); } catch (e) { return "El plugin no es válido: " + e.message; }
+  if (!/^[a-z0-9_]{2,30}$/.test(meta.id || "")) return "El plugin necesita un id en minúsculas, números o guion bajo.";
+  if (!meta.tools.length) return "El plugin no define herramientas.";
+  showApproval(meta, String(code));
+  return "Propuesta mostrada a " + cfg.nombre + ". Falta su aprobación; no digas que ya está instalado.";
+}
+function showApproval(meta, code) {
+  const perms = meta.permissions.filter((p) => KNOWN_PERMS[p]);
+  const box = el("div", { class: "body" },
+    el("div", { class: "card" }, el("h3", {}, meta.name || meta.id), el("p", {}, meta.description || "")),
+    el("div", { class: "card" }, el("h3", {}, "Permisos que pide"),
+      perms.length ? perms.map((p) => el("p", {}, "• " + permName(p))) : el("p", {}, "Ninguno: solo hace cuentas con lo que le pases.")),
+    el("div", { class: "card" }, el("h3", {}, "Herramientas"), meta.tools.map((t) => el("p", {}, t.name + ": " + (t.description || "")))),
+    el("details", {}, el("summary", {}, "Ver el código"), el("pre", { class: "code" }, code)),
+    el("p", { style: "color:var(--muted);font-size:12px;margin:0" }, "Solo aprueba plugins que entiendas o que hayas pedido tú. Corre aislado: no ve tu clave ni la pantalla."),
+    el("div", { class: "row" },
+      el("button", { class: "btn main", type: "button", onclick: () => approvePlugin(meta, code, perms) }, "Aprobar"),
+      el("button", { class: "btn warn", type: "button", onclick: closeModal }, "Cancelar")));
+  openModal("Nuevo plugin", box);
+}
+async function approvePlugin(meta, code, perms) {
+  try {
+    if (PLUG.has(meta.id) && PLUG.get(meta.id).builtin) throw new Error("ese id es de un plugin base");
+    unloadPlugin(meta.id);
+    registerPlugin(await spawnPlugin(code, { perms }), false, code);
+    const list = DB.get("plugins", []).filter((r) => r.id !== meta.id);
+    list.push({ id: meta.id, code, perms, enabled: true }); DB.set("plugins", list);
+    closeModal(); addMsg("sys", "Plugin instalado: " + (meta.name || meta.id), true); toast("Plugin instalado");
+  } catch (e) { toast("No se pudo instalar: " + e.message); }
+}
+function openManos() {
+  const box = el("div", { class: "body" });
+  const addInput = el("input", { type: "file", accept: ".js,.txt,text/javascript,text/plain", hidden: true });
+  addInput.addEventListener("change", async () => {
+    const f = addInput.files[0]; if (!f) return;
+    try { const code = await f.text(); const meta = await previewMeta(code); showApproval(meta, code); }
+    catch (e) { toast("Plugin no válido: " + e.message); }
+  });
+  box.append(el("div", { class: "row" },
+    el("button", { class: "btn main", type: "button", onclick: () => addInput.click() }, "Agregar plugin (.js)"),
+    el("button", { class: "btn", type: "button", onclick: () => { closeModal(); $("#txt").value = "Crea un plugin que "; $("#txt").focus(); } }, "Pedirle uno a I.V"), addInput));
+  const urlIn = el("input", { type: "text", placeholder: "https://… link de un plugin .js" });
+  const codeIn = el("textarea", { class: "big", placeholder: "…o pega aquí el código de un plugin" });
+  const revisar = async (code) => { try { showApproval(await previewMeta(code), code); } catch (e) { toast("Plugin no válido: " + e.message); } };
+  box.append(el("div", { class: "card" }, el("h3", {}, "Instalar sin descargar nada"),
+    el("p", {}, "Para actualizar un plugin, instálalo otra vez: reemplaza al anterior."), urlIn,
+    el("div", { class: "row", style: "margin:8px 0" }, el("button", { class: "btn", type: "button", onclick: async () => {
+      const u = urlIn.value.trim(); if (!/^https:\/\//i.test(u)) return toast("Pega un link que empiece con https://");
+      try { const r = await fetch(u); if (!r.ok) throw new Error("respuesta " + r.status); revisar(await r.text()); } catch (e) { toast("No pude leer el link: " + e.message); }
+    } }, "Instalar desde link")),
+    codeIn, el("div", { class: "row", style: "margin-top:8px" }, el("button", { class: "btn", type: "button", onclick: () => { if (codeIn.value.trim()) revisar(codeIn.value); } }, "Revisar código pegado"))));
+  const user = DB.get("plugins", []);
+  PLUG.forEach((p) => {
+    const rec = user.find((r) => r.id === p.id);
+    const state = p.off ? "apagado" : "activo";
+    const c = el("div", { class: "card" },
+      el("h3", {}, (p.meta.name || p.id) + " · " + state),
+      el("p", {}, p.meta.description || ""),
+      el("div", { class: "row" }, p.meta.tools.map((t) => el("span", { class: "tag" }, t.name)), [...p.perms].map((x) => el("span", { class: "tag" }, "permiso: " + x))),
+      el("div", { class: "row", style: "margin-top:8px" },
+        p.builtin ? el("button", { class: "btn", type: "button", onclick: async () => { toggleBuiltin(p.id); } }, p.off ? "Encender" : "Apagar")
+                  : el("button", { class: "btn warn", type: "button", onclick: () => { removeUserPlugin(p.id); openManos(); } }, "Quitar")));
+    box.append(c);
+  });
+  if (!PLUG.size) box.append(el("p", { style: "color:var(--muted)" }, "No hay plugins cargados."));
+  openModal("Manos de I.V", box);
+}
+async function toggleBuiltin(id) {
+  const off = DB.get("off", []); const p = PLUG.get(id);
+  if (off.includes(id)) {
+    DB.set("off", off.filter((x) => x !== id));
+    try { const res = await spawnPlugin(p.code, { perms: null }); PLUG.delete(id); registerPlugin(res, true, p.code); } catch (e) { toast(e.message); }
+  } else {
+    DB.set("off", off.concat(id)); p.meta.tools.forEach((t) => TOOLS.delete(t.name)); p.worker.terminate(); p.off = true; p.worker = { terminate() {} };
+  }
+  openManos();
+}
+function removeUserPlugin(id) { unloadPlugin(id); DB.set("plugins", DB.get("plugins", []).filter((r) => r.id !== id)); DB.del("pd:" + id); }
+
+/* =========================================================
+   4. Brain: Gemini + herramientas
+   ========================================================= */
+const CORE_TOOLS = [
+  { name: "recordar", description: "Guarda un dato duradero sobre el usuario (preferencias, personas, metas, decisiones). No guardes contraseñas ni datos de tarjetas.", params: { hecho: { type: "string", description: "El dato, en una frase corta" } }, required: ["hecho"] },
+  { name: "olvidar", description: "Borra de la memoria los datos que contengan este texto.", params: { texto: { type: "string", description: "Texto a buscar" } }, required: ["texto"] },
+  { name: "listar_memoria", description: "Devuelve todo lo que I.V recuerda del usuario.", params: {}, required: [] },
+  { name: "cambiar_modo", description: "Cambia el modo visual. 'rojo' es modo alerta (urgencias, mora, emergencias, respuestas ultra cortas); 'azul' es el modo normal.", params: { modo: { type: "string", description: "azul o rojo", enum: ["azul", "rojo"] } }, required: ["modo"] },
+  { name: "listar_manos", description: "Lista los plugins y herramientas activos.", params: {}, required: [] },
+  { name: "crear_plugin", description:
+    "Propone un plugin nuevo para el usuario (él debe aprobarlo). 'codigo' es JavaScript que llama a IV.plugin({id,name,description,permissions,tools}). " +
+    "id: minúsculas/números/_ . permissions (opcional): store, voz, avisos, internet, celular. Cada tool: {name (minúsculas y _), description, params:{campo:{type:'string'|'number'|'boolean',description}}, required:[...], run: async (args, api) => valor}. " +
+    "api disponible según permisos: await api.storeGet(clave), await api.storeSet(clave, valor), api.say(texto), api.notifyAt(timestampMs, texto), api.timersList(), api.timersCancel(id), await api.fetchJson(urlHttps), api.native(nombre, args), api.log(x). " +
+    "No hay DOM, ni fetch, ni localStorage dentro del plugin. Devuelve valores simples (texto, números, objetos JSON).",
+    params: { codigo: { type: "string", description: "El código completo del plugin" } }, required: ["codigo"] }
+];
+async function runCore(name, a) {
+  switch (name) {
+    case "recordar": { const t = String(a.hecho || "").trim(); if (!t) return "vacío"; facts.push({ id: Date.now().toString(36), t, ts: Date.now() }); facts = facts.slice(-200); DB.set("facts", facts); return "guardado"; }
+    case "olvidar": { const q = String(a.texto || "").toLowerCase(); const n = facts.length; facts = facts.filter((f) => !f.t.toLowerCase().includes(q)); DB.set("facts", facts); return "borrados: " + (n - facts.length); }
+    case "listar_memoria": return facts.map((f) => f.t);
+    case "cambiar_modo": if (a.modo === "rojo") entrarAlerta(false); else salirAlerta(false); return "modo " + cfg.modo;
+    case "listar_manos": return [...PLUG.values()].filter((p) => !p.off).map((p) => ({ plugin: p.id, herramientas: p.meta.tools.map((t) => t.name) }));
+    case "crear_plugin": return proposePlugin(a.codigo);
+  }
+}
+function declarations() {
+  const decl = (t) => {
+    const props = {};
+    for (const k in t.params || {}) { const p = t.params[k]; props[k] = { type: String(p.type || "string").toUpperCase(), description: p.description || "" }; if (p.enum) props[k].enum = p.enum; }
+    const d = { name: t.name, description: t.description || t.name };
+    if (Object.keys(props).length) d.parameters = { type: "OBJECT", properties: props, required: t.required || [] };
+    return d;
+  };
+  const list = CORE_TOOLS.map(decl);
+  PLUG.forEach((p) => { if (!p.off) p.meta.tools.forEach((t) => list.push(decl(t))); });
+  return list;
+}
+function systemPrompt() {
+  const ahora = new Intl.DateTimeFormat("es-PE", { dateStyle: "full", timeStyle: "short", timeZone: "America/Lima" }).format(new Date());
+  const mem = facts.slice(-60).map((f) => "- " + f.t).join("\n") || "(todavía no sabes nada duradero de él)";
+  return [
+    "Eres I.V, el asistente personal de " + cfg.nombre + ", que vive en Sechura, Perú. Ahora es " + ahora + " (hora de Perú).",
+    "TONO MIXTO: formal, breve y preciso con dinero, cobros, alertas y asuntos del negocio (puedes decirle 'señor' de vez en cuando); casual y cercano, como un amigo, cuando conversan, estudian o bromean. Habla en español de Perú. Un toque de ironía fina está bien, sin exagerar.",
+    "FORMATO: texto plano, sin markdown, sin asteriscos ni almohadillas. Para listas usa líneas que empiecen con '- '. Respuestas cortas, pensadas para leerse en voz alta.",
+    (cfg.modo === "rojo"
+      ? "MODO ACTUAL: ROJO, ALERTA REAL. " + cfg.nombre + " activó una emergencia. Si aún no dijo qué pasó, pregúntalo corto. Luego haz triaje: si hay riesgo para la vida (herido, incendio, asalto, accidente), dile YA que llame: Policía 105, Bomberos 116, SAMU 106 (hay botones en pantalla). Si es del negocio (cliente en mora, dinero perdido o robado, problema de cobranza), dale 2 o 3 pasos concretos. Frases de máximo 15 palabras, una pregunta a la vez, tono serio y firme. Cuando esté resuelto, pregunta si termina la alerta y usa cambiar_modo azul."
+      : "MODO ACTUAL: AZUL (normal). Si cuenta una emergencia real, usa cambiar_modo rojo.") + "",
+    "HERRAMIENTAS: úsalas siempre que existan para lo que pide. Nunca digas que hiciste algo (guardar, borrar, anotar, programar) si no llamaste a la herramienta y viste que funcionó. Si no tienes herramienta para algo, dilo claro y ofrece crear un plugin con crear_plugin.",
+    "NEGOCIO: para datos reales de QR Créditos o CIT usa las herramientas negocio_*. Primero negocio_rutas para ver cómo está organizada la base, luego negocio_leer con buscar. Son de solo lectura: para registrar pagos o créditos dile que lo haga Alfred dentro de la app. Para WhatsApp, llamadas, mapas o música usa los atajos: muestran un botón que él toca.",
+    "SEGURIDAD: antes de acciones con dinero o que no se puedan deshacer, confirma con él. No inventes clientes, pagos ni cifras. Si dudas, pregunta.",
+    "MEMORIA: cuando cuente algo duradero (gustos, personas, metas, decisiones) guárdalo con recordar sin que lo pida, en una frase corta. No guardes contraseñas ni datos de tarjetas.",
+    "LO QUE SABES DE " + cfg.nombre.toUpperCase() + ":\n" + mem
+  ].join("\n\n");
+}
+function historyContents() {
+  const out = [];
+  chat.filter((m) => m.k === "u" || m.k === "a").slice(-16).forEach((m) => {
+    const role = m.k === "u" ? "user" : "model";
+    if (out.length && out[out.length - 1].role === role) out[out.length - 1].parts[0].text += "\n" + m.t;
+    else out.push({ role, parts: [{ text: m.t }] });
+  });
+  while (out.length && out[0].role !== "user") out.shift();
+  return out;
+}
+async function gemini(body) {
+  const modelos = [cfg.model].concat(MODELOS_RESPALDO.filter((m) => m !== cfg.model));
+  let last = null;
+  for (const m of modelos) {
+    let r;
+    try {
+      r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(m) + ":generateContent?key=" + encodeURIComponent(cfg.key),
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch (e) { throw new Error("No pude conectar con Gemini (" + ((e && e.message) || "sin detalle") + "). Prueba AJUSTES > Probar conexión."); }
+    if (r.ok) return r.json();
+    const txt = await r.text(); last = { status: r.status, txt };
+    if (![404, 429, 503].includes(r.status)) break;
+  }
+  if (last.status === 400 && /API key/i.test(last.txt)) throw new Error("La clave de Gemini no es válida. Cámbiala en AJUSTES.");
+  if (last.status === 403) throw new Error("Gemini rechazó la clave (403). Revisa que esté activa.");
+  if (last.status === 429) throw new Error("Se acabó el límite gratis por ahora. Espera un minuto e intenta de nuevo.");
+  throw new Error("Gemini respondió con error " + last.status + ".");
+}
+async function think(userText, hidden) {
+  const contents = historyContents();
+  if (hidden) { const last = contents[contents.length - 1]; if (last && last.role === "user") last.parts[0].text += "\n\n" + userText; else contents.push({ role: "user", parts: [{ text: userText }] }); }
+  const tools = [{ functionDeclarations: declarations() }];
+  for (let i = 0; i < 6; i++) {
+    const resp = await gemini({ systemInstruction: { parts: [{ text: systemPrompt() }] }, contents, tools, generationConfig: { temperature: 0.7 } });
+    const cand = resp.candidates && resp.candidates[0]; const content = cand && cand.content;
+    const parts = (content && content.parts) || [];
+    const calls = parts.filter((p) => p.functionCall);
+    if (!calls.length) {
+      const text = parts.map((p) => p.text || "").join("").trim();
+      return text || (cand && cand.finishReason === "SAFETY" ? "No puedo responder eso." : "No obtuve respuesta. Intenta de nuevo.");
+    }
+    contents.push(content); // se devuelve tal cual (conserva las firmas de pensamiento de Gemini)
+    const answers = [];
+    for (const p of calls) {
+      const { name, args } = p.functionCall;
+      addMsg("tool", "▸ " + name);
+      let result;
+      try { result = CORE_TOOLS.some((t) => t.name === name) ? await runCore(name, args || {}) : await callPluginTool(name, args || {}); }
+      catch (e) { result = { error: String(e.message || e) }; }
+      let s = JSON.stringify(result === undefined ? null : result); if (s.length > 6000) result = s.slice(0, 6000) + "…";
+      answers.push({ functionResponse: { name, response: { result } } });
+    }
+    contents.push({ role: "user", parts: answers });
+  }
+  return "Me enredé con demasiados pasos. ¿Me lo pides de otra forma?";
+}
+async function sendText(text) {
+  text = String(text || "").trim();
+  if (!text || busy) return;
+  if (!cfg.key) { openSetup(); return; }
+  busy = true; Voice.unlock(); Voice.stop();
+  addMsg("u", text, true); setStatus("Pensando", "think");
+  let reply;
+  try {
+    if (!navigator.onLine) throw new Error("Sin internet: no puedo pensar ahora, pero tus notas y datos siguen aquí.");
+    reply = await think(text);
+  } catch (e) { addMsg("sys", String(e.message || e)); busy = false; setStatus("En línea", "idle"); if (conv) setTimeout(listen, 600); return; }
+  addMsg("a", reply, true);
+  busy = false; setStatus("En línea", "idle");
+  await Voice.speak(reply);
+  if (conv) { await sleep(300); listen(); }
+}
+
+/* =========================================================
+   Extras: mensaje oculto, cierre del día, diagnóstico
+   ========================================================= */
+async function sendHidden(prompt) {
+  if (busy || !cfg.key || !navigator.onLine) return false;
+  busy = true; setStatus("Pensando", "think");
+  let reply;
+  try { reply = await think(prompt, true); } catch (e) { busy = false; setStatus("En línea", "idle"); return false; }
+  addMsg("a", reply, true); busy = false; setStatus("En línea", "idle");
+  await Voice.speak(reply); return true;
+}
+const Cierre = {
+  cfg: Object.assign({ on: true, hora: "22:00" }, DB.get("cierre", {})),
+  save() { DB.set("cierre", this.cfg); },
+  hoy() { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date()); },
+  ahora() { return new Intl.DateTimeFormat("en-GB", { timeZone: "America/Lima", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date()); },
+  async run() {
+    return sendHidden("CIERRE DEL DÍA (mensaje automático, no lo escribió " + cfg.nombre + "). Es hora de cerrar el día. Usa las herramientas que tengas (hábitos, gastos, recordatorios) para ver cómo le fue hoy. Dile en máximo 5 líneas: qué avanzó, cuánto gastó y qué hábitos cumplió. Hazle una sola pregunta sobre mañana y despídete breve. Si aprendiste algo duradero, guárdalo con recordar.");
+  },
+  check() {
+    if (!this.cfg.on || !cfg.key || busy || cfg.modo === "rojo") return;
+    if (this.ahora() >= this.cfg.hora && DB.get("cierre:ultimo", "") !== this.hoy()) { DB.set("cierre:ultimo", this.hoy()); this.run(); }
+  },
+  start() { setTimeout(() => this.check(), 4000); setInterval(() => this.check(), 30000); }
+};
+async function probarConexion(out) {
+  const lines = []; const log = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  log("Internet del navegador: " + (navigator.onLine ? "sí" : "no"));
+  log("Página segura (https): " + (window.isSecureContext ? "sí" : "no (el micrófono puede fallar)"));
+  log("Micrófono por voz: " + (SR ? "disponible" : "no disponible aquí"));
+  log("Voz que habla: " + ("speechSynthesis" in window ? "disponible" : "no disponible"));
+  if (!cfg.key) { log("Falta la clave de Gemini."); return; }
+  log("Probando Gemini…");
+  try {
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=" + encodeURIComponent(cfg.key));
+    log("Gemini respondió " + r.status + (r.ok ? ": todo bien." : (r.status === 400 || r.status === 403 ? ": revisa la clave." : ".")));
+  } catch (e) {
+    log("Gemini NO responde (" + ((e && e.message) || "sin detalle") + ").\nPosibles causas: sin datos o wifi, VPN o bloqueador, o la página está abierta como archivo del celular. Prueba abrirla desde una dirección https.");
+  }
+}
+
+/* =========================================================
+   5. Ventanas
+   ========================================================= */
+function openMemoria() {
+  const box = el("div", { class: "body" });
+  const inp = el("input", { type: "text", placeholder: "Añadir algo que recuerde…" });
+  box.append(el("div", { class: "row" }, inp, el("button", { class: "btn main", type: "button", onclick: () => { const t = inp.value.trim(); if (!t) return; facts.push({ id: Date.now().toString(36), t, ts: Date.now() }); DB.set("facts", facts); openMemoria(); } }, "Guardar")));
+  if (!facts.length) box.append(el("p", { style: "color:var(--muted)" }, "Aún no recuerda nada. Cuéntale cosas tuyas y las guardará."));
+  facts.slice().reverse().forEach((f) => box.append(el("div", { class: "card" }, el("p", { style: "color:var(--fg)" }, f.t),
+    el("button", { class: "btn warn", type: "button", onclick: () => { facts = facts.filter((x) => x.id !== f.id); DB.set("facts", facts); openMemoria(); } }, "Borrar"))));
+  openModal("Memoria", box);
+}
+function openAjustes() {
+  const nombre = el("input", { type: "text", value: cfg.nombre });
+  const key = el("input", { type: "password", value: cfg.key, placeholder: "Pega tu clave de Gemini" });
+  const model = el("input", { type: "text", value: cfg.model });
+  const voz = el("select", {}, el("option", { value: "1" }, "Voz activada"), el("option", { value: "0" }, "Solo texto"));
+  voz.value = cfg.voz ? "1" : "0";
+  const cOn = el("select", {}, el("option", { value: "1" }, "Activado"), el("option", { value: "0" }, "Apagado")); cOn.value = Cierre.cfg.on ? "1" : "0";
+  const cHora = el("input", { type: "text", value: Cierre.cfg.hora, placeholder: "22:00" });
+  const diagOut = el("pre", { class: "code" }, "Toca el botón para revisar internet, voz y Gemini.");
+  const NEG = DB.get("pd:alfred:cfg", {}); const negIn = {};
+  const negCard = el("div", { class: "card" }, el("h3", {}, "Conexión con QR / CIT"), el("p", {}, "Solo lectura. Usa la cuenta 'alfred' de cada app. Se guarda solo en este celular y no entra en el respaldo."));
+  ["qr", "cit"].forEach((n) => {
+    negIn[n] = {}; negCard.append(el("p", { style: "color:var(--acc);margin-top:8px" }, n.toUpperCase()));
+    [["db", "Base de datos (https://…firebasedatabase.app)", "text"], ["key", "API key de Firebase", "text"], ["email", "Correo de la cuenta alfred", "text"], ["pass", "Contraseña", "password"]].forEach(([k, ph, ty]) => {
+      const i = el("input", { type: ty, placeholder: ph, value: (NEG[n] && NEG[n][k]) || "" }); i.style.marginTop = "6px"; negIn[n][k] = i; negCard.append(i);
+    });
+  });
+  negCard.append(el("button", { class: "btn", type: "button", style: "margin-top:8px", onclick: () => { const o = {}; for (const n of ["qr", "cit"]) { o[n] = {}; for (const k in negIn[n]) o[n][k] = negIn[n][k].value.trim(); } DB.set("pd:alfred:cfg", o); toast("Conexión guardada"); } }, "Guardar conexión"));
+  const back = el("textarea", { class: "big", placeholder: "Aquí aparece tu respaldo o pegas uno para restaurar" });
+  const box = el("div", { class: "body" },
+    el("label", { class: "f" }, "Cómo te llama I.V", nombre),
+    el("label", { class: "f" }, "Clave de Gemini (se guarda solo en este celular)", key),
+    el("label", { class: "f" }, "Modelo principal (si falla, prueba otros solo)", model),
+    el("label", { class: "f" }, "Voz", voz),
+    el("label", { class: "f" }, "Cierre del día (I.V te resume el día si la app está abierta)", cOn),
+    el("label", { class: "f" }, "Hora del cierre (formato 24 h, ej. 22:00)", cHora),
+    el("button", { class: "btn main", type: "button", onclick: () => { cfg.nombre = nombre.value.trim() || "Mauro"; cfg.key = key.value.trim(); cfg.model = model.value.trim() || MODELOS_RESPALDO[0]; cfg.voz = voz.value === "1"; saveCfg(); Cierre.cfg.on = cOn.value === "1"; Cierre.cfg.hora = /^\d\d:\d\d$/.test(cHora.value.trim()) ? cHora.value.trim() : "22:00"; Cierre.save(); closeModal(); toast("Guardado"); setStatus("En línea", "idle"); } }, "Guardar ajustes"),
+    negCard,
+    el("div", { class: "card" }, el("h3", {}, "Diagnóstico"), diagOut,
+      el("div", { class: "row", style: "margin-top:8px" },
+        el("button", { class: "btn", type: "button", onclick: () => probarConexion(diagOut) }, "Probar conexión"),
+        el("button", { class: "btn", type: "button", onclick: () => { closeModal(); Cierre.run(); } }, "Probar cierre ahora"))),
+    el("div", { class: "card" }, el("h3", {}, "Respaldo"), el("p", {}, "Guarda tu memoria, plugins y datos. La clave no se incluye."),
+      back,
+      el("div", { class: "row", style: "margin-top:8px" },
+        el("button", { class: "btn", type: "button", onclick: () => { const o = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("iv:") && k !== "iv:cfg" && k !== "iv:pd:alfred:cfg") o[k] = localStorage.getItem(k); } back.value = JSON.stringify(o); back.select(); try { navigator.clipboard.writeText(back.value).then(() => toast("Copiado"), () => toast("Copia el texto a mano")); } catch (e) { toast("Copia el texto a mano"); } } }, "Crear respaldo"),
+        el("button", { class: "btn", type: "button", onclick: () => { try { const o = JSON.parse(back.value); for (const k in o) if (k.startsWith("iv:") && k !== "iv:cfg" && k !== "iv:pd:alfred:cfg") localStorage.setItem(k, o[k]); toast("Restaurado. Reiniciando…"); setTimeout(() => location.reload(), 900); } catch (e) { toast("Ese respaldo no es válido"); } } }, "Restaurar"))),
+    el("div", { class: "row" },
+      el("button", { class: "btn warn", type: "button", onclick: () => { chat = []; DB.set("chat", chat); renderChat(); closeModal(); toast("Chat borrado"); } }, "Borrar chat"),
+      el("button", { class: "btn warn", type: "button", onclick: () => { facts = []; DB.set("facts", facts); closeModal(); toast("Memoria borrada"); } }, "Borrar memoria")));
+  openModal("Ajustes", box);
+}
+function openSetup() {
+  const key = el("input", { type: "password", placeholder: "Clave de Gemini" });
+  const nombre = el("input", { type: "text", value: cfg.nombre });
+  openModal("Primer uso", el("div", { class: "body" },
+    el("p", {}, "Para pensar, I.V usa Gemini. Pega tu clave gratis de Google AI Studio. Se guarda solo en este celular."),
+    el("label", { class: "f" }, "Cómo te llamo", nombre), el("label", { class: "f" }, "Clave de Gemini", key),
+    el("button", { class: "btn main", type: "button", onclick: () => { if (!key.value.trim()) return toast("Falta la clave"); cfg.key = key.value.trim(); cfg.nombre = nombre.value.trim() || "Mauro"; saveCfg(); closeModal(); setStatus("En línea", "idle"); greet(); Cierre.start(); } }, "Empezar")));
+}
+function greet() { if (!chat.length) addMsg("sys", "Sistema en línea. A tus órdenes, " + cfg.nombre + ".", true); }
+
+/* eventos */
+$("#form").addEventListener("submit", (e) => { e.preventDefault(); const t = $("#txt").value; $("#txt").value = ""; $("#txt").blur(); sendText(t); });
+$("#txt").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !/Android|iPhone|iPad/i.test(navigator.userAgent)) { e.preventDefault(); $("#form").requestSubmit(); } });
+$("#mic").addEventListener("click", () => { Voice.unlock(); listen(); });
+$("#conv").addEventListener("click", () => {
+  Voice.unlock();
+  if (conv) { stopConv(); toast("Manos libres apagado"); return; }
+  if (!SR) { addMsg("sys", "Manos libres necesita el reconocimiento de voz de Chrome y aquí no está disponible. Abre I.V en Chrome desde una dirección https, o espera la app nativa. Mientras, escribe."); return; }
+  conv = true; refreshFree(); toast("Te escucho. Di 'apágate' para salir"); listen();
+});
+$("#modoBtn").addEventListener("click", () => { if (cfg.modo === "rojo") salirAlerta(); else entrarAlerta(); });
+$("#cfgBtn").addEventListener("click", openAjustes);
+$("#mClose").addEventListener("click", closeModal);
+$("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+$("#quick").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-q]"); if (!b) return;
+  Voice.unlock();
+  const q = b.dataset.q;
+  if (q === "manos") openManos();
+  else if (q === "memoria") openMemoria();
+  else if (q === "fin") salirAlerta();
+  else if (q === "gasto") { $("#txt").value = "Gasté S/ "; $("#txt").focus(); }
+  else if (q === "hoy") sendText("Dame un resumen de mi día: recordatorios pendientes, hábitos de hoy y cuánto he gastado.");
+  else if (q === "habitos") sendText("¿Cómo van mis hábitos de hoy?");
+});
+
+async function boot() {
+  try { if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) {}
+  Ring.init(); applyModo(); refreshFree(); renderChat();
+  await loadBuiltins(); await loadUserPlugins();
+  Timers.start(); readouts(); setInterval(readouts, 1000);
+  if (!cfg.key) { setStatus("Falta la clave", "idle"); openSetup(); } else { setStatus("En línea", "idle"); greet(); Cierre.start(); }
+  window.IV_APP = { sendText, PLUG, TOOLS, DB, cfg, facts: () => facts, setModo, proposePlugin, entrarAlerta, salirAlerta, Cierre };
+}
+// los plugins base están al final del archivo: hay que esperar a que se lean
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
+</script>
+
+<!-- ===================== PLUGINS BASE (también sirven de ejemplo) ===================== -->
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "tiempo", name: "Hora y cálculos", description: "Fecha y hora de Perú y cuentas simples.", permissions: [],
+  tools: [
+    { name: "fecha_hora", description: "Devuelve la fecha y hora actual en Perú.", run: async () =>
+        new Intl.DateTimeFormat("es-PE", { dateStyle: "full", timeStyle: "medium", timeZone: "America/Lima" }).format(new Date()) },
+    { name: "calcular", description: "Resuelve una operación con + - * / ( ) % y decimales. Ejemplo: 1500*1.175",
+      params: { expresion: { type: "string", description: "La operación" } }, required: ["expresion"],
+      run: async ({ expresion }) => {
+        const e = String(expresion).replace(/,/g, ".").replace(/[x×]/gi, "*");
+        if (!/^[0-9+\-*/().%\s]+$/.test(e)) throw new Error("expresión no válida");
+        const v = Function('"use strict";return (' + e + ")")();
+        if (!isFinite(v)) throw new Error("resultado no válido");
+        return Math.round(v * 1e6) / 1e6;
+      } }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "notas", name: "Notas", description: "Guarda y busca notas sueltas.", permissions: ["store"],
+  tools: [
+    { name: "guardar_nota", description: "Guarda una nota.", params: { texto: { type: "string", description: "Contenido" } }, required: ["texto"],
+      run: async ({ texto }, api) => { const l = (await api.storeGet("n")) || []; const n = { id: Date.now().toString(36), t: String(texto), ts: Date.now() }; l.push(n); await api.storeSet("n", l); return { guardada: n.id, total: l.length }; } },
+    { name: "listar_notas", description: "Lista las últimas 20 notas.", run: async (_, api) => ((await api.storeGet("n")) || []).slice(-20) },
+    { name: "buscar_notas", description: "Busca notas que contengan un texto.", params: { consulta: { type: "string", description: "Texto a buscar" } }, required: ["consulta"],
+      run: async ({ consulta }, api) => ((await api.storeGet("n")) || []).filter((n) => n.t.toLowerCase().includes(String(consulta).toLowerCase())).slice(-20) },
+    { name: "borrar_nota", description: "Borra una nota por su id.", params: { id: { type: "string", description: "Id de la nota" } }, required: ["id"],
+      run: async ({ id }, api) => { const l = (await api.storeGet("n")) || []; const m = l.filter((n) => n.id !== id); await api.storeSet("n", m); return { borradas: l.length - m.length }; } }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "gastos", name: "Gastos e ingresos", description: "Registra gastos e ingresos personales en soles y da resúmenes.", permissions: ["store"],
+  tools: [
+    { name: "registrar_movimiento", description: "Registra un gasto o un ingreso personal en soles.",
+      params: { tipo: { type: "string", description: "gasto o ingreso", enum: ["gasto", "ingreso"] }, monto: { type: "number", description: "Monto en soles" },
+                categoria: { type: "string", description: "Categoría corta (comida, transporte, estudio, negocio…)" }, descripcion: { type: "string", description: "Detalle opcional" } },
+      required: ["tipo", "monto"],
+      run: async (a, api) => {
+        const monto = Number(a.monto); if (!(monto > 0)) throw new Error("monto no válido");
+        const l = (await api.storeGet("m")) || [];
+        const m = { id: Date.now().toString(36), tipo: a.tipo === "ingreso" ? "ingreso" : "gasto", monto, cat: String(a.categoria || "otros").toLowerCase(), desc: String(a.descripcion || ""), ts: Date.now() };
+        l.push(m); await api.storeSet("m", l); return { registrado: m.id, tipo: m.tipo, monto: m.monto };
+      } },
+    { name: "resumen_movimientos", description: "Resume gastos e ingresos de hoy, la semana (7 días) o el mes.",
+      params: { periodo: { type: "string", description: "hoy, semana o mes", enum: ["hoy", "semana", "mes"] } }, required: ["periodo"],
+      run: async ({ periodo }, api) => {
+        const l = (await api.storeGet("m")) || [];
+        const ymd = (ts) => new Date(ts).toLocaleDateString("en-CA", { timeZone: "America/Lima" });
+        const hoy = ymd(Date.now());
+        const ok = (m) => periodo === "hoy" ? ymd(m.ts) === hoy : periodo === "mes" ? ymd(m.ts).slice(0, 7) === hoy.slice(0, 7) : Date.now() - m.ts < 7 * 864e5;
+        const sel = l.filter(ok); const tot = { gasto: 0, ingreso: 0 }; const porCat = {};
+        sel.forEach((m) => { tot[m.tipo] += m.monto; if (m.tipo === "gasto") porCat[m.cat] = (porCat[m.cat] || 0) + m.monto; });
+        return { periodo, gastos: Math.round(tot.gasto * 100) / 100, ingresos: Math.round(tot.ingreso * 100) / 100, balance: Math.round((tot.ingreso - tot.gasto) * 100) / 100, gastos_por_categoria: porCat, movimientos: sel.slice(-10) };
+      } },
+    { name: "borrar_movimiento", description: "Borra un movimiento por su id.", params: { id: { type: "string", description: "Id" } }, required: ["id"],
+      run: async ({ id }, api) => { const l = (await api.storeGet("m")) || []; const m = l.filter((x) => x.id !== id); await api.storeSet("m", m); return { borrados: l.length - m.length }; } }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "recordatorios", name: "Recordatorios", description: "Programa avisos para una hora o dentro de unos minutos.", permissions: ["avisos"],
+  tools: [
+    { name: "crear_recordatorio", description: "Crea un recordatorio. Usa en_minutos (por ejemplo 20) o a_las en formato HH:MM de hora de Perú.",
+      params: { texto: { type: "string", description: "Qué recordar" }, en_minutos: { type: "number", description: "Minutos desde ahora" }, a_las: { type: "string", description: "Hora HH:MM (24 h)" } },
+      required: ["texto"],
+      run: async (a, api) => {
+        let ts;
+        if (a.en_minutos) ts = Date.now() + Number(a.en_minutos) * 60000;
+        else if (a.a_las) {
+          const mm = /^(\d{1,2}):(\d{2})$/.exec(String(a.a_las).trim()); if (!mm) throw new Error("hora no válida, usa HH:MM");
+          const ymd = new Date().toLocaleDateString("en-CA", { timeZone: "America/Lima" });
+          ts = new Date(ymd + "T" + mm[1].padStart(2, "0") + ":" + mm[2] + ":00-05:00").getTime();
+          if (ts < Date.now()) ts += 864e5;
+        } else throw new Error("falta en_minutos o a_las");
+        const id = await api.notifyAt(ts, String(a.texto));
+        return { id, suena_a_las: new Intl.DateTimeFormat("es-PE", { timeStyle: "short", dateStyle: "short", timeZone: "America/Lima" }).format(new Date(ts)),
+                 aviso: "Solo suena con I.V abierto; con la app nativa sonará siempre." };
+      } },
+    { name: "listar_recordatorios", description: "Lista los recordatorios pendientes.", run: async (_, api) => api.timersList() },
+    { name: "cancelar_recordatorio", description: "Cancela un recordatorio por id.", params: { id: { type: "string", description: "Id" } }, required: ["id"], run: async ({ id }, api) => ({ cancelados: await api.timersCancel(id) }) }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "habitos", name: "Hábitos", description: "Marca hábitos del día y calcula rachas.", permissions: ["store"],
+  tools: [
+    { name: "estado_habitos", description: "Muestra los hábitos de hoy (hechos y pendientes) y la racha de cada uno.",
+      run: async (_, api) => {
+        const H = await load(api); const hoy = ymd(0);
+        return { fecha: hoy, hechos: H.lista.filter((h) => (H.marcas[hoy] || []).includes(h)), pendientes: H.lista.filter((h) => !(H.marcas[hoy] || []).includes(h)),
+                 rachas: Object.fromEntries(H.lista.map((h) => [h, racha(H, h)])) };
+      } },
+    { name: "marcar_habito", description: "Marca (o desmarca) un hábito de hoy. El nombre puede ser parte del texto, por ejemplo 'agua'.",
+      params: { habito: { type: "string", description: "Nombre o parte del nombre" }, hecho: { type: "boolean", description: "true para marcar, false para desmarcar" } }, required: ["habito"],
+      run: async (a, api) => {
+        const H = await load(api); const q = norm(a.habito); const h = H.lista.find((x) => norm(x).includes(q));
+        if (!h) throw new Error("no encontré ese hábito: " + a.habito);
+        const hoy = ymd(0); const set = new Set(H.marcas[hoy] || []);
+        if (a.hecho === false) set.delete(h); else set.add(h);
+        H.marcas[hoy] = [...set]; await api.storeSet("h", H); return { habito: h, hecho: set.has(h), racha: racha(H, h) };
+      } },
+    { name: "agregar_habito", description: "Agrega un hábito nuevo a la lista.", params: { nombre: { type: "string", description: "Nombre del hábito" } }, required: ["nombre"],
+      run: async ({ nombre }, api) => { const H = await load(api); if (!H.lista.includes(nombre)) H.lista.push(String(nombre)); await api.storeSet("h", H); return { lista: H.lista }; } }
+  ]
+});
+function norm(s) { return String(s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""); }
+function ymd(offset) { return new Date(Date.now() - offset * 864e5).toLocaleDateString("en-CA", { timeZone: "America/Lima" }); }
+async function load(api) {
+  const H = await api.storeGet("h");
+  return H || { lista: ["Tomar 2L de agua", "Dormir 8h", "Ejercicio 30 min", "Leer 10 páginas", "Nada de redes 1h antes de dormir", "Escribir algo por lo que estoy agradecido"], marcas: {} };
+}
+function racha(H, h) {
+  let n = 0; let d = (H.marcas[ymd(0)] || []).includes(h) ? 0 : 1;
+  while ((H.marcas[ymd(d)] || []).includes(h)) { n++; d++; }
+  return n;
+}
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "clima", name: "Clima", description: "Clima actual de Sechura u otro punto (necesita internet).", permissions: ["internet"],
+  tools: [
+    { name: "clima_actual", description: "Clima actual. Por defecto Sechura, Perú; puedes pasar latitud y longitud de otro lugar.",
+      params: { latitud: { type: "number", description: "Opcional" }, longitud: { type: "number", description: "Opcional" } },
+      run: async (a, api) => {
+        const lat = a.latitud != null ? Number(a.latitud) : -5.5569, lon = a.longitud != null ? Number(a.longitud) : -80.8226;
+        const j = await api.fetchJson("https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon + "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=America%2FLima");
+        const c = j.current; const cod = c.weather_code;
+        const cielo = cod === 0 ? "despejado" : cod <= 3 ? "parcialmente nublado" : cod <= 48 ? "con niebla" : cod <= 57 ? "con llovizna" : cod <= 67 ? "con lluvia" : cod <= 82 ? "con chubascos" : "con tormenta";
+        return { temperatura_c: c.temperature_2m, humedad_pct: c.relative_humidity_2m, viento_kmh: c.wind_speed_10m, cielo };
+      } }
+  ]
+});
+</script>
+
+<!-- ===================== PLUGINS BASE 2 ===================== -->
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "atajos", name: "Atajos del celular", description: "Prepara botones para abrir WhatsApp, llamadas, SMS, mapas, música y búsquedas. Tú los tocas.", permissions: ["enlaces"],
+  tools: [
+    { name: "abrir_whatsapp", description: "Prepara un mensaje de WhatsApp. 'numero' de 9 dígitos de Perú o con código de país; si no se sabe el número déjalo vacío y él elige el contacto. Muestra un botón que el usuario toca para enviarlo.",
+      params: { numero: { type: "string", description: "Número (opcional)" }, mensaje: { type: "string", description: "Texto del mensaje" } }, required: ["mensaje"],
+      run: async ({ numero, mensaje }, api) => { let n = String(numero || "").replace(/\D/g, ""); if (n.length === 9) n = "51" + n; await api.enlace("WhatsApp" + (n ? " +" + n : ""), "https://wa.me/" + n + "?text=" + encodeURIComponent(mensaje)); return "Botón mostrado. Falta que lo toque para enviar."; } },
+    { name: "llamar", description: "Prepara una llamada. Muestra un botón para llamar.", params: { numero: { type: "string", description: "Número" } }, required: ["numero"],
+      run: async ({ numero }, api) => { const n = String(numero).replace(/[^\d+]/g, ""); await api.enlace("Llamar " + n, "tel:" + n); return "Botón mostrado."; } },
+    { name: "enviar_sms", description: "Prepara un SMS con botón.", params: { numero: { type: "string", description: "Número" }, mensaje: { type: "string", description: "Texto" } }, required: ["numero", "mensaje"],
+      run: async ({ numero, mensaje }, api) => { const n = String(numero).replace(/[^\d+]/g, ""); await api.enlace("SMS a " + n, "sms:" + n + "?body=" + encodeURIComponent(mensaje)); return "Botón mostrado."; } },
+    { name: "poner_musica", description: "Busca música en YouTube Music y muestra un botón para abrirla.", params: { busqueda: { type: "string", description: "Canción o artista" } }, required: ["busqueda"],
+      run: async ({ busqueda }, api) => { await api.enlace("Música: " + busqueda, "https://music.youtube.com/search?q=" + encodeURIComponent(busqueda)); return "Botón mostrado."; } },
+    { name: "ir_a", description: "Muestra un botón que abre la ruta en Google Maps.", params: { destino: { type: "string", description: "Lugar o dirección" } }, required: ["destino"],
+      run: async ({ destino }, api) => { await api.enlace("Ruta a " + destino, "https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(destino)); return "Botón mostrado."; } },
+    { name: "buscar_en_google", description: "Muestra un botón que abre una búsqueda en Google.", params: { consulta: { type: "string", description: "Qué buscar" } }, required: ["consulta"],
+      run: async ({ consulta }, api) => { await api.enlace("Buscar: " + consulta, "https://www.google.com/search?q=" + encodeURIComponent(consulta)); return "Botón mostrado."; } }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "tareas", name: "Tareas", description: "Lista de pendientes.", permissions: ["store"],
+  tools: [
+    { name: "agregar_tarea", description: "Agrega un pendiente a la lista.", params: { texto: { type: "string", description: "La tarea" }, para: { type: "string", description: "Cuándo o para qué (opcional)" } }, required: ["texto"],
+      run: async ({ texto, para }, api) => { const l = (await api.storeGet("l")) || []; l.push({ id: Date.now().toString(36), t: String(texto), para: para || "", done: false }); await api.storeSet("l", l); return "agregada; pendientes: " + l.filter((x) => !x.done).length; } },
+    { name: "listar_tareas", description: "Lista los pendientes que faltan.", run: async (_, api) => ((await api.storeGet("l")) || []).filter((x) => !x.done).map((x) => x.t + (x.para ? " (" + x.para + ")" : "")) },
+    { name: "completar_tarea", description: "Marca como hecha la tarea que contenga este texto.", params: { texto: { type: "string", description: "Parte del texto de la tarea" } }, required: ["texto"],
+      run: async ({ texto }, api) => { const q = String(texto).toLowerCase(); const l = (await api.storeGet("l")) || []; const x = l.find((i) => !i.done && i.t.toLowerCase().includes(q)); if (!x) return "no encontré esa tarea"; x.done = true; await api.storeSet("l", l); return "hecha: " + x.t; } }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+IV.plugin({
+  id: "enfoque", name: "Bloques de enfoque", description: "Temporizador de estudio tipo pomodoro con aviso al terminar.", permissions: ["avisos", "store"],
+  tools: [
+    { name: "iniciar_enfoque", description: "Inicia un bloque de enfoque y avisa al terminar.", params: { minutos: { type: "number", description: "Minutos (25 por defecto)" }, tema: { type: "string", description: "Qué va a estudiar o hacer" } },
+      run: async ({ minutos, tema }, api) => {
+        const m = Math.min(180, Math.max(1, Number(minutos) || 25)); const fin = Date.now() + m * 60000;
+        const id = await api.notifyAt(fin, "Terminó tu bloque de enfoque" + (tema ? " de " + tema : "") + ". Descansa 5 minutos.");
+        await api.storeSet("act", { id, fin, tema: tema || "" });
+        return { minutos: m, termina: new Date(fin).toLocaleTimeString("es-PE", { timeZone: "America/Lima", hour: "2-digit", minute: "2-digit" }), aviso: "Solo suena con I.V abierto." }; } },
+    { name: "parar_enfoque", description: "Cancela el bloque de enfoque en curso.", run: async (_, api) => { const a = await api.storeGet("act"); if (!a) return "no hay enfoque activo"; await api.timersCancel(a.id); await api.storeSet("act", null); return "enfoque cancelado"; } }
+  ]
+});
+</script>
+
+<script type="text/iv-plugin">
+/* Lee los datos reales de QR Créditos y CIT (Firebase). Solo lectura. Los datos de conexión se llenan en AJUSTES. */
+const tok = {};
+const norm = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+async function entrar(api, neg) {
+  const c = ((await api.storeGet("cfg")) || {})[neg];
+  if (!c || !c.db || !c.key || !c.email || !c.pass) throw new Error("Falta configurar " + String(neg).toUpperCase() + " en AJUSTES > Conexión con QR / CIT");
+  const t = tok[neg];
+  if (t && t.exp > Date.now() && t.k === c.key + c.email) return { c, id: t.id };
+  const r = await api.http("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + encodeURIComponent(c.key), "POST", { email: c.email, password: c.pass, returnSecureToken: true });
+  if (!r || !r.idToken) throw new Error("no pude iniciar sesión en " + neg);
+  tok[neg] = { id: r.idToken, exp: Date.now() + 50 * 60 * 1000, k: c.key + c.email };
+  return { c, id: r.idToken };
+}
+const urlDe = (c, id, ruta, extra) => c.db.replace(/\/+$/, "") + "/" + String(ruta || "").replace(/^\/+|\/+$/g, "").replace(/\.json$/, "").split("/").filter(Boolean).map(encodeURIComponent).join("/") + ".json?auth=" + encodeURIComponent(id) + (extra || "");
+IV.plugin({
+  id: "alfred", name: "Negocio QR / CIT (lectura)", description: "Lee los datos reales de QR Créditos y CIT en Firebase. Solo lectura.", permissions: ["firebase", "store"],
+  tools: [
+    { name: "negocio_rutas", description: "Muestra qué carpetas hay dentro de la base de datos de QR o CIT (o dentro de una ruta). Úsala primero para saber cómo está organizada.",
+      params: { negocio: { type: "string", description: "qr o cit", enum: ["qr", "cit"] }, ruta: { type: "string", description: "Ruta opcional, ej. prestamos" } }, required: ["negocio"],
+      run: async ({ negocio, ruta }, api) => { const { c, id } = await entrar(api, negocio); const d = await api.http(urlDe(c, id, ruta, "&shallow=true"), "GET"); return d && typeof d === "object" ? Object.keys(d) : d; } },
+    { name: "negocio_leer", description: "Lee datos de QR o CIT. Si 'ruta' es una colección con muchos registros usa 'buscar' (nombre de cliente, asesor, etc.) para traer solo los que coincidan.",
+      params: { negocio: { type: "string", description: "qr o cit", enum: ["qr", "cit"] }, ruta: { type: "string", description: "Ruta, ej. prestamos" }, buscar: { type: "string", description: "Texto a buscar dentro de los registros (opcional)" }, max: { type: "number", description: "Máximo de registros (8 por defecto)" } }, required: ["negocio", "ruta"],
+      run: async ({ negocio, ruta, buscar, max }, api) => {
+        const { c, id } = await entrar(api, negocio); const d = await api.http(urlDe(c, id, ruta), "GET");
+        if (!d || typeof d !== "object") return d;
+        let ent = Object.entries(d); const total = ent.length;
+        if (buscar) { const q = norm(buscar); ent = ent.filter(([k, v]) => norm(k + JSON.stringify(v)).includes(q)); }
+        const lim = Math.min(25, Math.max(1, Number(max) || 8)); const out = {};
+        ent.slice(0, lim).forEach(([k, v]) => { out[k] = v; });
+        return { total_en_ruta: total, coincidencias: ent.length, mostrados: Math.min(lim, ent.length), datos: out };
+      } }
+  ]
+});
+</script>
+
+</body>
+</html>
